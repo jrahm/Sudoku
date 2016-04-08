@@ -27,6 +27,9 @@ import qualified Data.IntMap as IM
 import Data.IntMap (IntMap)
 
 import Data.Maybe
+import Control.Monad.State.Lazy
+
+import System.Environment
 
 {-| the backtracking sudoku solver -}
 
@@ -60,7 +63,8 @@ readSudokuFile path =
 
         let list =
              concatMap (\(row, l) ->
-                    map (\(col, char) -> ((row, col), fromChar char)) (zip [0..] l)
+                    map (\(col, char) ->
+                            ((row, col), fromChar char)) (zip [0..] l)
                 ) (zip [0..] lns)
 
         return (array ((0,0), (nsq-1, nsq-1)) list)
@@ -111,14 +115,40 @@ matrix = newListArray ((0,0), (24, 24)) (repeat Nothing)
 
 isInt x = x == fromInteger (round x)
 
+pruneSudokuPossible :: SudokuArray s -> SudokuPossible -> ST s SudokuPossible
+pruneSudokuPossible arr possible@SudokuPossible {gameSize=size} =
+    flip execStateT possible $
+
+        forM_ [0..size*size-1] $ \row ->
+            forM_ [0..size*size-1] $ \col -> do
+
+                value' <- lift $ readArray arr (row, col)
+
+                case value' of
+                    Just value -> do
+                        let boxidx = (row `div` size, col `div` size)
+                        let update = Just . S.delete value
+
+                        modify (\s@SudokuPossible{boxSets = boxes} ->
+                                    s {boxSets = M.update update boxidx boxes})
+
+                        modify (\s@SudokuPossible{rowSets = rows} ->
+                                    s {rowSets = IM.update update row rows})
+
+                        modify (\s@SudokuPossible{colSets = cols} ->
+                                    s {colSets = IM.update update col cols})
+
+                    Nothing -> return ()
+
 solve :: forall s. SudokuArray s -> ST s (Either String SolvedSudoku)
 solve arr = do
         ((r1, c1), (r2, c2)) <- getBounds arr
         let (w, h) = (r2 - r1 + 1, c2 - c1 + 1)
 
         let n = round (sqrt $ fromIntegral w)
-        if w == h && isInt (sqrt $ fromIntegral w) then
-                solve' (mkSudokuPossible n) (0, 0) n >> serialize
+        if w == h && isInt (sqrt $ fromIntegral w) then do
+                possible <- pruneSudokuPossible arr (mkSudokuPossible n)
+                solve' possible (0, 0) n >> serialize
             else
                 return (Left ("Invalid sudoku game bounds: " ++ show (w,h)))
     where
@@ -211,16 +241,23 @@ solve arr = do
 
 
 main :: IO ()
-main =
-    let earr = runST (solve =<< matrix)
-        in
+main = do
+    args <- getArgs
 
-        case earr of
+    forM_ args $ \filePath -> do
+        array <- readSudokuFile filePath
+
+        case array of
             Left err -> putStrLn err
-            Right arr ->
-                let ((r0, c0), (r1, c1)) = bounds arr in
+            Right matrix ->
+                let earr = runST (solve =<< thaw matrix) in
 
-                forM_ [r0 .. r1] $ \row -> do
-                    forM_ [c0 .. c1] $ \col ->
-                        putStr $ show (arr ! (row, col)) ++ " "
-                    putStrLn ""
+                case earr of
+                    Left err -> putStrLn err
+                    Right arr ->
+                        let ((r0, c0), (r1, c1)) = bounds arr in
+
+                        forM_ [r0 .. r1] $ \row -> do
+                            forM_ [c0 .. c1] $ \col ->
+                                putStr $ show (arr ! (row, col)) ++ " "
+                            putStrLn ""
