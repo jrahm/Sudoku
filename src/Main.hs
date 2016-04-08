@@ -56,10 +56,10 @@ readSudokuFile path =
             n = round (sqrt $ fromIntegral nsq)
 
         when (n * n /= nsq) $
-            left $ printf "Invalid soduku dimensions %dx%d. (Must be of form n^2xn^2" nsq nsq
+            left $ printf "Invalid soduku dimensions %dx%d. (Must be of form n^2xn^2)" nsq nsq
 
-        when (any (\x -> length x /= n) lns) $
-            left $ printf "Some line not equal to %d in sudoku"
+        when (any (\x -> length x /= nsq) lns) $
+            left $ printf "Some line not equal to %d in sudoku" n
 
         let list =
              concatMap (\(row, l) ->
@@ -95,7 +95,7 @@ getPossibleValues (SudokuPossible size boxes rows cols) (row, col) =
 
             boxset <- M.lookup boxidx boxes
             rowset <- IM.lookup row rows
-            colset <- IM.lookup row rows
+            colset <- IM.lookup col cols
 
             let intersect = boxset `S.intersection` rowset `S.intersection` colset
             return $ flip map (S.toList intersect) $ \value ->
@@ -172,8 +172,7 @@ solve arr = do
         solve' possible (row, col) size | col == size*size && row < size*size =
             solve' possible (row+1, 0) size
 
-        solve' possible (row, col) size | row == size*size = do
-            traceM $ "row = " ++ show row
+        solve' possible (row, col) size | row == size*size =
             return Nothing
 
         solve' possible idx@(row, col) size =
@@ -188,12 +187,14 @@ solve arr = do
                             case val of
                                 Just _ -> loop ts
                                 Nothing -> do
-                                    traceM $ printf "%s = %d" (show idx) i
                                     writeArray arr idx (Just i)
                                     return Nothing
-            in
+            in do
 
-            loop subTrees
+            value <- readArray arr idx
+            case value of
+                Nothing -> loop subTrees
+                Just _ -> solve' possible (row, col + 1) size
 
         (^&&^) = liftM2 (&&)
 
@@ -259,5 +260,5 @@ main = do
 
                         forM_ [r0 .. r1] $ \row -> do
                             forM_ [c0 .. c1] $ \col ->
-                                putStr $ show (arr ! (row, col)) ++ " "
+                                putStr $ return $ chr (arr ! (row, col) + ord 'A' - 1)
                             putStrLn ""
