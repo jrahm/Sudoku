@@ -2,6 +2,7 @@
 {-# LANGUAGE TupleSections #-}
 module Main where
 
+import Data.Char
 import Control.Monad.Trans
 import Control.Monad.ST
 import Control.Monad.Trans.Either
@@ -16,17 +17,97 @@ import Control.Monad.Loops
 import Debug.Trace
 import Text.Printf
 
+import qualified Data.Set as S
+import Data.Set (Set)
+
+import qualified Data.Map as M
+import Data.Map (Map)
+
+import qualified Data.IntMap as IM
+import Data.IntMap (IntMap)
+
+import Data.Maybe
+
 {-| the backtracking sudoku solver -}
 
+type SudokuArrayFreeze = Array (Int, Int) (Maybe Int)
 type SudokuArray s = STArray s (Int, Int) (Maybe Int)
 type SolvedSudoku = Array (Int, Int) Int
+
+{- I wish haskell had some dependent typing for here -}
+data SudokuPossible =
+        SudokuPossible {
+              gameSize :: Int -- sqrt n
+
+            , boxSets :: Map (Int, Int) (Set Int) -- set of possible values left for each box
+            , rowSets :: IntMap (Set Int) -- set of possible values left for each row
+            , colSets :: IntMap (Set Int) -- set of possible values left for each col
+        }
+
+readSudokuFile :: FilePath -> IO (Either String SudokuArrayFreeze)
+readSudokuFile path =
+    runEitherT $ do
+        lns <- lift $ lines <$> readFile path
+
+        let nsq = length lns
+            n = round (sqrt $ fromIntegral nsq)
+
+        when (n * n /= nsq) $
+            left $ printf "Invalid soduku dimensions %dx%d. (Must be of form n^2xn^2" nsq nsq
+
+        when (any (\x -> length x /= n) lns) $
+            left $ printf "Some line not equal to %d in sudoku"
+
+        let list =
+             concatMap (\(row, l) ->
+                    map (\(col, char) -> ((row, col), fromChar char)) (zip [0..] l)
+                ) (zip [0..] lns)
+
+        return (array ((0,0), (nsq-1, nsq-1)) list)
+
+    where
+        fromChar '.' = Nothing
+        fromChar c = Just $ ord c - ord 'A' + 1
+
+
+mkSudokuPossible :: Int -> SudokuPossible
+mkSudokuPossible sqrtN =
+    let allset = S.fromList [1..sqrtN*sqrtN] in
+    SudokuPossible sqrtN
+        (M.fromList $ map (,allset) (range ((0, 0), (sqrtN, sqrtN))))
+        (IM.fromList $ map (,allset) [0..sqrtN*sqrtN - 1])
+        (IM.fromList $ map (,allset) [0..sqrtN*sqrtN - 1])
+
+
+-- ^ takes a stat of possible numbers and a position and a list of
+-- possible number with updated states.
+getPossibleValues :: SudokuPossible -> (Int, Int) -> [(Int, SudokuPossible)]
+getPossibleValues (SudokuPossible size boxes rows cols) (row, col) =
+    fromMaybe (error $ printf "Bad row and column %s" (show (row, col))) ans
+
+    where
+        ans = do
+            let boxidx = (row `div` size, col `div` size)
+
+            boxset <- M.lookup boxidx boxes
+            rowset <- IM.lookup row rows
+            colset <- IM.lookup row rows
+
+            let intersect = boxset `S.intersection` rowset `S.intersection` colset
+            return $ flip map (S.toList intersect) $ \value ->
+                let update = Just . S.delete value
+                    boxes' = M.update update boxidx boxes
+                    rows' = IM.update update row rows
+                    cols' = IM.update update col cols
+                    in
+                    (value, SudokuPossible size boxes' rows' cols')
 
 traceOn = True
 
 traceM' x = when traceOn $ traceM x
 
 matrix :: ST s (SudokuArray s)
-matrix = newListArray ((0,0), (3,3)) (repeat Nothing)
+matrix = newListArray ((0,0), (24, 24)) (repeat Nothing)
 
 isInt x = x == fromInteger (round x)
 
@@ -37,7 +118,7 @@ solve arr = do
 
         let n = round (sqrt $ fromIntegral w)
         if w == h && isInt (sqrt $ fromIntegral w) then
-                solve' (0, 0) n 1 >> serialize
+                solve' (mkSudokuPossible n) (0, 0) n >> serialize
             else
                 return (Left ("Invalid sudoku game bounds: " ++ show (w,h)))
     where
@@ -56,29 +137,33 @@ solve arr = do
                     Right <$> freeze ret
 
 
-        solve' :: (Int, Int) -> Int -> Int ->  ST s (Maybe String)
-        solve' place size n | n > size*size = return (Just $ "Fail at " ++ show place)
-        solve' (row, col) size n | col == size*size && row < size*size =
-            solve' (row+1, 0) size n
+        {- No news is good news -- NNIGN-}
+        solve' :: SudokuPossible -> (Int, Int) -> Int -> ST s (Maybe String)
+        solve' possible (row, col) size | col == size*size && row < size*size =
+            solve' possible (row+1, 0) size
 
-        solve' (row, col) size n | row == size*size = do
+        solve' possible (row, col) size | row == size*size = do
             traceM $ "row = " ++ show row
             return Nothing
 
-        solve' idx@(row, col) size n = do
-            traceM' $ printf "(%d, %d) = %d" row col n
+        solve' possible idx@(row, col) size =
+            let subTrees = getPossibleValues possible idx
 
-            valid <- isValidPosition idx n size
+                loop :: [(Int, SudokuPossible)] -> ST s (Maybe String)
+                loop trees =
+                    case trees of
+                        [] -> return (Just $ "Fail at " ++ show idx)
+                        ((i, newpossible):ts) -> do
+                            val <- solve' newpossible (row, col + 1) size
+                            case val of
+                                Just _ -> loop ts
+                                Nothing -> do
+                                    traceM $ printf "%s = %d" (show idx) i
+                                    writeArray arr idx (Just i)
+                                    return Nothing
+            in
 
-            if valid then do
-                writeArray arr idx (Just n)
-                err <- solve' (row, col + 1) size 1
-                case err of
-                    Just err -> solve' idx size (n + 1)
-                    Nothing -> return Nothing
-
-            else
-                solve' idx size (n + 1)
+            loop subTrees
 
         (^&&^) = liftM2 (&&)
 
