@@ -2,40 +2,47 @@
 {-# LANGUAGE TupleSections #-}
 module Main where
 
-import Data.Char
-import Control.Monad.Trans
-import Control.Monad.ST
-import Control.Monad.Trans.Either
-
-import Data.Array.MArray
-import Data.Array.ST
-import Data.Array
-
+import Control.Concurrent.PooledIO.Independent
+import Control.DeepSeq
+import Control.Exception.Base
 import Control.Monad
 import Control.Monad.Loops
+import Control.Monad.Random
+import Control.Monad.ST
+import Control.Monad.State.Lazy
+import Control.Monad.Trans
+import Control.Monad.Trans.Either
+import Control.Monad.Writer
+
+import Data.Array
+import Data.Array.MArray
+import Data.Array.ST
+import Data.Char
+import Data.IntMap (IntMap)
+import Data.Map (Map)
+import Data.Maybe
+import Data.Set (Set)
+import Data.Time.Clock.POSIX
 
 import Debug.Trace
+
+import System.CPUTime
+import System.Environment
+import System.IO.Unsafe
+import System.Random
+import System.Random.Shuffle
+import System.Timeout
+
 import Text.Printf
 
-import qualified Data.Set as S
-import Data.Set (Set)
-
-import qualified Data.Map as M
-import Data.Map (Map)
-
 import qualified Data.IntMap as IM
-import Data.IntMap (IntMap)
-
-import Data.Maybe
-import Control.Monad.State.Lazy
-
-import System.Environment
+import qualified Data.Map as M
+import qualified Data.Set as S
 
 {-| the backtracking sudoku solver -}
 
-type SudokuArrayFreeze = Array (Int, Int) (Maybe Int)
-type SudokuArray s = STArray s (Int, Int) (Maybe Int)
-type SolvedSudoku = Array (Int, Int) Int
+type SudokuArray = Array (Int, Int) Int
+type ThawedSudokuArray s = STUArray s (Int, Int) Int
 
 {- I wish haskell had some dependent typing for here -}
 data SudokuPossible =
@@ -47,7 +54,10 @@ data SudokuPossible =
             , colSets :: IntMap (Set Int) -- set of possible values left for each col
         }
 
-readSudokuFile :: FilePath -> IO (Either String SudokuArrayFreeze)
+readSudokuFile :: FilePath -> IO (Either String SudokuArray)
+{-^ Read from a sudoku array from a file. The file is structured
+ - as a text file with n^2 lines and n^2 columns in each line. A dot
+ - ('.') is considered an empty cell, and a -}
 readSudokuFile path =
     runEitherT $ do
         lns <- lift $ lines <$> readFile path
@@ -70,8 +80,23 @@ readSudokuFile path =
         return (array ((0,0), (nsq-1, nsq-1)) list)
 
     where
-        fromChar '.' = Nothing
-        fromChar c = Just $ ord c - ord 'A' + 1
+        fromChar '.' = 0
+        fromChar c | isDigit c = ord c - ord '0'
+        fromChar c = ord c - ord 'A' + 10
+
+sudokuArrayToString :: SudokuArray -> String
+sudokuArrayToString array =
+    let ((r0, c0), (r1, c1)) = bounds array in
+    execWriter $
+      forM_ [r0 .. r1] $ \row -> do
+        forM_ [c0 .. c1] $ \col ->
+          tell $ return $ fromInt (array ! (row, col))
+        tell "\n"
+
+    where
+        fromInt 0 = '.'
+        fromInt i | i < 10 = chr (i + ord '0')
+        fromInt i = chr (i - 10 + ord 'A')
 
 
 mkSudokuPossible :: Int -> SudokuPossible
@@ -81,6 +106,7 @@ mkSudokuPossible sqrtN =
         (M.fromList $ map (,allset) (range ((0, 0), (sqrtN, sqrtN))))
         (IM.fromList $ map (,allset) [0..sqrtN*sqrtN - 1])
         (IM.fromList $ map (,allset) [0..sqrtN*sqrtN - 1])
+
 
 
 -- ^ takes a stat of possible numbers and a position and a list of
@@ -106,16 +132,12 @@ getPossibleValues (SudokuPossible size boxes rows cols) (row, col) =
                     in
                     (value, SudokuPossible size boxes' rows' cols')
 
-traceOn = True
-
-traceM' x = when traceOn $ traceM x
-
-matrix :: ST s (SudokuArray s)
-matrix = newListArray ((0,0), (24, 24)) (repeat Nothing)
+matrix :: Int -> ST s (ThawedSudokuArray s)
+matrix n = newListArray ((0,0), (n*n-1, n*n-1)) (repeat 0)
 
 isInt x = x == fromInteger (round x)
 
-pruneSudokuPossible :: SudokuArray s -> SudokuPossible -> ST s SudokuPossible
+pruneSudokuPossible :: ThawedSudokuArray s -> SudokuPossible -> ST s SudokuPossible
 pruneSudokuPossible arr possible@SudokuPossible {gameSize=size} =
     flip execStateT possible $
 
@@ -125,7 +147,8 @@ pruneSudokuPossible arr possible@SudokuPossible {gameSize=size} =
                 value' <- lift $ readArray arr (row, col)
 
                 case value' of
-                    Just value -> do
+                    0 -> return ()
+                    value -> do
                         let boxidx = (row `div` size, col `div` size)
                         let update = Just . S.delete value
 
@@ -138,47 +161,63 @@ pruneSudokuPossible arr possible@SudokuPossible {gameSize=size} =
                         modify (\s@SudokuPossible{colSets = cols} ->
                                     s {colSets = IM.update update col cols})
 
-                    Nothing -> return ()
+generateSudoku :: (RandomGen g) => Int -> Rand g SudokuArray
+{- Generates a random sudoku board. -}
+generateSudoku n = liftRand $
+      \stgen ->
+        let (st1, st2) = split stgen
+            ret = runST $
+                    evalRandT (
+                       lift (matrix n) >>=
+                         (\mat ->
+                           solveA mat >> lift (freeze mat))
+                     ) st1
+            in
+            (ret, st1)
 
-solve :: forall s. SudokuArray s -> ST s (Either String SolvedSudoku)
-solve arr = do
-        ((r1, c1), (r2, c2)) <- getBounds arr
-        let (w, h) = (r2 - r1 + 1, c2 - c1 + 1)
-
-        let n = round (sqrt $ fromIntegral w)
-        if w == h && isInt (sqrt $ fromIntegral w) then do
-                possible <- pruneSudokuPossible arr (mkSudokuPossible n)
-                solve' possible (0, 0) n >> serialize
-            else
-                return (Left ("Invalid sudoku game bounds: " ++ show (w,h)))
+removeNumbers :: (RandomGen g) => Int -> SudokuArray -> Rand g SudokuArray
+{- Deletes numbers from sudoku. The number provided is the number
+ - of hints to keep -}
+removeNumbers n array = do
+    indicies <- drop n <$> shuffleM (range $ bounds array)
+    return $ runST (shuffle indicies =<< thaw array)
     where
-        serialize :: ST s (Either String SolvedSudoku)
-        serialize = do
-            assocs <- getAssocs arr
-            let x = mapM (\(i, v) -> case v of
-                             Nothing -> Left $ "unset value at " ++ show i
-                             Just v' -> Right (i, v')) assocs
+     shuffle :: [(Int, Int)] -> ThawedSudokuArray s -> ST s SudokuArray
+     shuffle indicies arrM = do
+         forM_ indicies $ \i ->
+             writeArray arrM i 0
+         freeze arrM
 
-            case x of
-                Left v -> return (Left v)
-                Right mp -> do
-                    ret <- (flip newArray 0 =<< getBounds arr) :: ST s (STArray s (Int, Int) Int)
-                    forM_ mp $ uncurry (writeArray ret)
-                    Right <$> freeze ret
+solve :: SudokuArray -> SudokuArray
+solve arr = runST $ evalRandT (do
+                        arrM <- lift $ thaw arr
+                        solveA arrM
+                        lift $ freeze arrM) (mkStdGen 0)
 
+solveA :: forall s g. (RandomGen g) => ThawedSudokuArray s -> RandT g (ST s) ()
+solveA arr = do
+        ((r1, c1), (r2, c2)) <- lift $ getBounds arr
+        let (w, h) = (r2 - r1 + 1, c2 - c1 + 1)
+        let n = round (sqrt $ fromIntegral w)
 
-        {- No news is good news -- NNIGN-}
-        solve' :: SudokuPossible -> (Int, Int) -> Int -> ST s (Maybe String)
+        unless ((w == h) && isInt (sqrt (fromIntegral w))) $
+            error "Invalid Sudoku Bounds"
+
+        possible <- lift $ pruneSudokuPossible arr (mkSudokuPossible n)
+        void $ solve' possible (0, 0) n
+
+    where
+
+        solve' :: forall g. (RandomGen g) => SudokuPossible -> (Int, Int) -> Int -> RandT g (ST s) (Maybe String)
         solve' possible (row, col) size | col == size*size && row < size*size =
             solve' possible (row+1, 0) size
 
         solve' possible (row, col) size | row == size*size =
             return Nothing
 
-        solve' possible idx@(row, col) size =
+        solve' possible idx@(row, col) size = do
             let subTrees = getPossibleValues possible idx
 
-                loop :: [(Int, SudokuPossible)] -> ST s (Maybe String)
                 loop trees =
                     case trees of
                         [] -> return (Just $ "Fail at " ++ show idx)
@@ -187,78 +226,108 @@ solve arr = do
                             case val of
                                 Just _ -> loop ts
                                 Nothing -> do
-                                    writeArray arr idx (Just i)
+                                    lift $ writeArray arr idx i
                                     return Nothing
-            in do
 
-            value <- readArray arr idx
+            value <- lift $ readArray arr idx
+            newTrees <- shuffleM subTrees
             case value of
-                Nothing -> loop subTrees
-                Just _ -> solve' possible (row, col + 1) size
+                0 -> loop newTrees
+                _ -> solve' possible (row, col + 1) size
 
-        (^&&^) = liftM2 (&&)
+-- main :: IO ()
+-- main = do
+--     array <- readSudokuFile "test/9x9-empty.txt"
+--     forM_ array $ \matrix ->
+--       forM_ [1..1000] $ \num -> do
+--         gen <- newStdGen
+--         let earr = runST (solve gen =<< thaw matrix)
+--
+--         case earr of
+--           Left err -> putStrLn err
+--           Right arr -> do
+--             let ((r0, c0), (r1, c1)) = bounds arr
+--
+--             let str = execWriter $
+--                   forM_ [r0 .. r1] $ \row -> do
+--                     forM_ [c0 .. c1] $ \col ->
+--                       case arr ! (row, col) of
+--                           0 -> tell "."
+--                           i -> tell $ return $ chr (i + ord 'A' - 1)
+--                     tell "\n"
+--
+--             writeFile ("test/9x9-" ++ show num ++ ".txt") str
 
+getTime = round <$> ((*1000) <$> getPOSIXTime)
 
-        isValidPosition :: (Int, Int) -> Int -> Int ->  ST s Bool
-        isValidPosition _ value sz | sz*sz < value = return False
-        isValidPosition (row, col) value sz =
-            isValidRow row value sz ^&&^
-            isValidCol col value sz ^&&^
-            isValidBox (row, col) value sz
-
-        isValidRow :: Int -> Int -> Int -> ST s Bool
-        isValidRow row value sz =
-            let size = sz*sz in
-            allM (\col -> liftM (/=Just value) (readArray arr (row, col))) [0..size-1]
-
-        isValidCol :: Int -> Int -> Int -> ST s Bool
-        isValidCol col value sz =
-            let size = sz*sz in
-            allM (\row -> liftM (/=Just value) (readArray arr (row, col))) [0..size-1]
-
-        isValidBox :: (Int, Int) -> Int -> Int -> ST s Bool
-        isValidBox (row, col) value sz =
-            let boxRowIdx = (row `div` sz) * sz
-                boxColIdx = (col `div` sz) * sz in
-
-                allM (\(row, col) -> liftM (/=Just value) (readArray arr (row, col)))
-                    (range ((boxRowIdx, boxColIdx), (boxRowIdx + sz - 1, boxColIdx + sz - 1)))
-
-
-
-
-    -- b@((r0, c0), (r1, c1)) <-  getBounds arr
-
-    -- ret <- newArray b 0 :: ST s (STArray s (Int, Int) Int)
-
-    -- forM_ [r0 .. r1] $ \row ->
-    --     forM_ [c0 .. c1] $ \col -> do
-    --         elem <-  readArray arr (row, col)
-    --         case elem of
-    --             Nothing -> writeArray ret (row, col) 0
-    --             Just x -> writeArray ret (row, col) x
-
-    -- Right <$> freeze ret
-
+chunk :: Int -> [a] -> [[a]]
+chunk _ [] = []
+chunk n xs = take n xs : chunk n (drop n xs)
 
 main :: IO ()
-main = do
-    args <- getArgs
+main =
 
-    forM_ args $ \filePath -> do
-        array <- readSudokuFile filePath
+    let lst = [(n, rnd, percent) | rnd <- [0::Int .. 999],
+                                   percent <- [0.8::Double, 0.6, 0.4, 0.2],
+                                   n <- [2, 3]
+                                   ]
+                                   in
+       run $ flip map lst $ \(n, roundNumber, percentKeep) -> do
+              let n4 = n * n * n * n
+              let h = round (percentKeep * fromIntegral n4) :: Int
+              let header = printf "- %02d %03d %03d -" n h roundNumber
 
-        case array of
-            Left err -> putStrLn err
-            Right matrix ->
-                let earr = runST (solve =<< thaw matrix) in
+              let fname = printf "runs/run-%02d-%03d-%03d.txt" n h roundNumber
 
-                case earr of
-                    Left err -> putStrLn err
-                    Right arr ->
-                        let ((r0, c0), (r1, c1)) = bounds arr in
 
-                        forM_ [r0 .. r1] $ \row -> do
-                            forM_ [c0 .. c1] $ \col ->
-                                putStr $ return $ chr (arr ! (row, col) + ord 'A' - 1)
-                            putStrLn ""
+              val <- timeout (10 * 60 * 1000000) $ do
+                putStrLn header
+
+                arr <- evalRandIO (generateSudoku n)
+                arr' <- evalRandIO (removeNumbers h arr)
+
+                startTime <- getTime
+                solved <- evaluate (solve arr')
+                endTime <- getTime
+
+                return $
+                    sudokuArrayToString arr ++ "\n\n" ++
+                    sudokuArrayToString arr' ++ "\n\n" ++
+                    sudokuArrayToString solved ++ "\n\n" ++
+                    printf "time: " ++ show (endTime - startTime) ++ "\n"
+
+              case val of
+                  Nothing -> do
+                      putStrLn "TIMEOUT!"
+                      writeFile fname "Timeout"
+
+                  Just s ->
+                      writeFile fname s
+
+
+
+
+
+-- main :: IO ()
+-- main = do
+--     args <- getArgs
+--     random <- newStdGen
+--
+--     forM_ args $ \filePath -> do
+--         putStrLn filePath
+--         array <- readSudokuFile filePath
+--
+--         case array of
+--             Left err -> putStrLn err
+--             Right matrix ->
+--                 let earr = runST (solve random =<< thaw matrix) in
+--
+--                 case earr of
+--                     Left err -> putStrLn err
+--                     Right arr ->
+--                         let ((r0, c0), (r1, c1)) = bounds arr in
+--
+--                         forM_ [r0 .. r1] $ \row -> do
+--                             forM_ [c0 .. c1] $ \col ->
+--                                 putStr $ return $ chr (arr ! (row, col) + ord 'A' - 1)
+--                             putStrLn ""
