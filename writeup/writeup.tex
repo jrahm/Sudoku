@@ -1,53 +1,9 @@
-% This is "sig-alternate.tex" V2.1 April 2013
-% This file should be compiled with V2.5 of "sig-alternate.cls" May 2012
-%
-% This example file demonstrates the use of the 'sig-alternate.cls'
-% V2.5 LaTeX2e document class file. It is for those submitting
-% articles to ACM Conference Proceedings WHO DO NOT WISH TO
-% STRICTLY ADHERE TO THE SIGS (PUBS-BOARD-ENDORSED) STYLE.
-% The 'sig-alternate.cls' file will produce a similar-looking,
-% albeit, 'tighter' paper resulting in, invariably, fewer pages.
-%
-% ----------------------------------------------------------------------------------------------------------------
-% This .tex file (and associated .cls V2.5) produces:
-%       1) The Permission Statement
-%       2) The Conference (location) Info information
-%       3) The Copyright Line with ACM data
-%       4) NO page numbers
-%
-% as against the acm_proc_article-sp.cls file which
-% DOES NOT produce 1) thru' 3) above.
-%
-% Using 'sig-alternate.cls' you have control, however, from within
-% the source .tex file, over both the CopyrightYear
-% (defaulted to 200X) and the ACM Copyright Data
-% (defaulted to X-XXXXX-XX-X/XX/XX).
-% e.g.
-% \CopyrightYear{2007} will cause 2007 to appear in the copyright line.
-% \crdata{0-12345-67-8/90/12} will cause 0-12345-67-8/90/12 to appear in the copyright line.
-%
-% ---------------------------------------------------------------------------------------------------------------
-% This .tex source is an example which *does* use
-% the .bib file (from which the .bbl file % is produced).
-% REMEMBER HOWEVER: After having produced the .bbl file,
-% and prior to final submission, you *NEED* to 'insert'
-% your .bbl file into your source .tex file so as to provide
-% ONE 'self-contained' source file.
-%
-% ================= IF YOU HAVE QUESTIONS =======================
-% Questions regarding the SIGS styles, SIGS policies and
-% procedures, Conferences etc. should be sent to
-% Adrienne Griscti (griscti@acm.org)
-%
-% Technical questions _only_ to
-% Gerald Murray (murray@hq.acm.org)
-% ===============================================================
-%
-% For tracking purposes - this is V2.0 - May 2012
 
 \documentclass{sig-alternate-05-2015}
 
 
+\usepackage{svg}
+\usepackage{pstricks}
 \begin{document}
 
 \title{Backtracking Sudoku}
@@ -67,6 +23,8 @@ Joshua Rahm\\
 % Just remember to make sure that the TOTAL number of authors
 % is the number that will appear on the first page PLUS the
 % number that will appear in the \additionalauthors section.
+
+\newcommand\citationneeded{${}^{\text{<citation\_needed>}}$}
 
 \maketitle
 \begin{abstract}
@@ -90,26 +48,31 @@ number on the interval $[1, n^2]$.
 
 For example, following is a valid solution for $n=3$ ($9\times 9$ grid)
 
-\begin{center}
-\sep
-\def\arraystretch{1.5}
-\begin{tabular}{| c c c | c c c | c c c |}
-\hline
-3&7&6&1&4&2&9&5&8 \\
-5&8&4&6&7&9&2&1&3 \\
-9&1&2&8&3&5&4&7&6 \\
-\hline
-6&9&1&2&5&4&3&8&7 \\
-8&4&5&3&6&7&1&9&2 \\
-2&3&7&9&1&8&5&6&4 \\
-\hline
-4&6&9&5&8&3&7&2&1 \\
-7&2&8&4&9&1&6&3&5 \\
-1&5&3&7&2&6&8&4&9 \\
-\hline
-\end{tabular}
-\sep
-\end{center}
+\begin{figure}
+    \begin{center}
+        \sep
+        \def\arraystretch{1.5}
+        \begin{tabular}{| c c c | c c c | c c c |}
+            \hline
+            3&7&6&1&4&2&9&5&8 \\
+            5&8&4&6&7&9&2&1&3 \\
+            9&1&2&8&3&5&4&7&6 \\
+            \hline
+            6&9&1&2&5&4&3&8&7 \\
+            8&4&5&3&6&7&1&9&2 \\
+            2&3&7&9&1&8&5&6&4 \\
+            \hline
+            4&6&9&5&8&3&7&2&1 \\
+            7&2&8&4&9&1&6&3&5 \\
+            1&5&3&7&2&6&8&4&9 \\
+            \hline
+        \end{tabular}
+        \sep
+    \end{center}
+
+    \caption{Example Complete Sudoku Board}
+    \label{fig:example}
+\end{figure}
 
 As you can see in the example above, all boxes, rows and columns contain all
 the numbers from 1 to 9.
@@ -122,20 +85,63 @@ associated with that block. The first step in the algorithm is to initialize
 the $SudokuPossibilities$, this is a data structure that keeps track of all
 the unused numbers for each row, column and block.
 
+The following pseudocode describes how the algroithm is implement.
+
+
 \section{Analysis}
 
 \subsection{Correctness}
 
 The correctness of this Sudoku solving algorithm is in tow steps. % BAD!!!
-First, I need to show that the solution the algorithm finds are actually correct
-solutions. This means tow things. First, it means that the original hints are
-in fact still in the solution! (The solver is not allowed to ignore the hints
-and return just any valid board.) In addition, the board state must be valid. This
-means that all rows, columns, and blocks must have unique numbers from $0..n$.
+First, I need to show that the solution the algorithm finds are actually
+correct solutions. This means tow things. First, it means that the original
+hints are in fact still in the solution! (The solver is not allowed to ignore
+the hints and return just any valid board.) In addition, the board state must
+be valid. This means that all rows, columns, and blocks must have unique
+numbers from $0..n$.
 
 This algorithm is designed such that doing any to the contrary is impossible.
 
 \subsection{Run Time}
+
+The general runtime for backtracking Sudoku is $O(N^H)$ where $H$ is the number
+of hints given. \citationneeded.
+
+\subsection{Empirical Results}
+
+To gather information on the runtime based on the factors identified in the section
+above. The results were generated as such; for $N=2,3,4$, and $H=0.2N,0.4N,0.6N,0.8N$.
+Each configuration of the problem had $1000$ runs where each run was a randomly
+generated Sudoku game for that configuration.
+
+In the interest of time, the runtime was capped at 10 minutes, so this will have
+skewed the results for the $N=4$ cases.
+
+\begin{figure*}
+    \begin{center}
+        \resizebox{\textwidth}{!}{%
+        \input{../runs/output.pdf_tex}}
+        \caption{Measured Results}
+        \label{fig:measured}
+    \end{center}
+\end{figure*}
+
+Figure \ref{fig:measured} is an in-depth look at the runtime for different configurations of
+Sudoku. The results clearly show a correlation between runtime and both factors. Each run
+is displayed as a semi-transparent circle, this represents a histogram. Where the line is darker,
+there are more runs that took that amount of time.
+
+
+The lines indicate the mean and median of the runtimes for each $N$, showing the relationship
+between $H$ and the runtime. The teal line indicates the median runtime for each $N$. This, shows
+an super-exponential relationship between $N$ and the runtime.
+
+Interestingly enough, there seems to be little consistency in the relationship
+for $H$ and $T$. In the $N=2$ and $N=4$ cases, $H=0.4N$ is the worst case, whereas,
+$H=0.2N$ is the worst case for $N=3$. This could be a result of the timeout not being
+high enough. There is a possibility that the timeout has skewed these results and
+the $N=4$ case does indeed look like the $N=3$ case, but considering the distributions
+of the unskewed data, this is probably not the case.
 
 \subsection{Space Usage}
 

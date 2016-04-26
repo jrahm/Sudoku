@@ -1,0 +1,35 @@
+#!/usr/bin/gnuplot -persist
+
+set term qt
+
+set xtic rotate
+set ylabel 'Runtime (Milliseconds)'
+set logscale y 10
+set yrange [1:600000]
+
+set title 'Runtime for Different Configurations of Sudoku'
+
+set grid
+
+set key left top
+
+max(x,y) = (x > y) ? x : y
+
+plot "02-003.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#facc8844' notitle, \
+     "02-006.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa664422' notitle, \
+     "02-010.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa332211' notitle, \
+     "02-013.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa221111' notitle, \
+     "03-016.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa88cc44' notitle, \
+     "03-032.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa446622' notitle, \
+     "03-049.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa223311' notitle, \
+     "03-065.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa112211' notitle, \
+     "04-051.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa8844cc' notitle, \
+     "04-102.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa442266' notitle, \
+     "04-154.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa221133' notitle, \
+     "04-205.txt" using 2:1:xticlabel(3) with point pt 7 lc rgb '#fa111122' notitle, \
+     "2-stats.txt" using 1:2 with linespoints title '4x4 Mean' pt 4 lc rgb '#FF0000', \
+     "3-stats.txt" using 1:2 with linespoints title '9x9 Mean' pt 4 lc rgb '#FFFF00', \
+     "4-stats.txt" using 1:2 with linespoints title '16x16 Mean' pt 4 lc rgb '#0000FF', \
+     "3-stats.txt" using 1:3 with linespoints title '9x9 Median' pt 4 lc rgb '#AAAA00', \
+     "4-stats.txt" using 1:3 with linespoints title '16x16 Median' pt 4 lc rgb '#0000AA', \
+     "all-stats.txt" using 1:(max(1,$3)) with linespoints title 'Average Runtime by N' pt 11 ps 2

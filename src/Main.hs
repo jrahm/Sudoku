@@ -280,11 +280,11 @@ main =
               let fname = printf "runs/run-%02d-%03d-%03d.txt" n h roundNumber
 
 
+              arr <- evalRandIO (generateSudoku n)
+              arr' <- evalRandIO (removeNumbers h arr)
+
               val <- timeout (10 * 60 * 1000000) $ do
                 putStrLn header
-
-                arr <- evalRandIO (generateSudoku n)
-                arr' <- evalRandIO (removeNumbers h arr)
 
                 startTime <- getTime
                 solved <- evaluate (solve arr')
@@ -299,7 +299,10 @@ main =
               case val of
                   Nothing -> do
                       putStrLn "TIMEOUT!"
-                      writeFile fname "Timeout"
+                      writeFile fname $
+                        sudokuArrayToString arr ++ "\n\n" ++
+                        sudokuArrayToString arr' ++ "\n\n" ++
+                        "Timeout\n"
 
                   Just s ->
                       writeFile fname s
